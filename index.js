@@ -1,10 +1,13 @@
 const express = require('express');
 const line = require('@line/bot-sdk');
+const { createClient } = require('@supabase/supabase-js');
 
 const config = {
   channelSecret: process.env.CHANNEL_SECRET,
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
 };
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 const app = express();
 const client = new line.messagingApi.MessagingApiClient({
@@ -87,6 +90,40 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   res.sendStatus(200);
 
   for (const event of events) {
+    if (event.type === 'postback') {
+      // แกะข้อมูลที่ฝังไว้ใน postback data ตอนกดปุ่มหมวดหมู่
+      const params = new URLSearchParams(event.postback.data);
+      const record = {
+        account_no: params.get('acc'),
+        type: params.get('type'),
+        amount: parseFloat(params.get('amt')),
+        category: params.get('cat'),
+        transaction_datetime: params.get('dt'),
+      };
+
+      const { error } = await supabase.from('transactions').insert(record);
+
+      if (error) {
+        console.error('บันทึกลง Supabase ไม่สำเร็จ:', error.message);
+        await client.replyMessage({
+          replyToken: event.replyToken,
+          messages: [{ type: 'text', text: 'บันทึกไม่สำเร็จ ลองใหม่อีกครั้งได้ไหม' }],
+        });
+      } else {
+        const typeLabel = record.type === 'income' ? 'รับ' : 'จ่าย';
+        await client.replyMessage({
+          replyToken: event.replyToken,
+          messages: [
+            {
+              type: 'text',
+              text: `บันทึกแล้ว: ${typeLabel} ${record.amount} บาท หมวด${record.category}`,
+            },
+          ],
+        });
+      }
+      continue;
+    }
+
     if (event.type !== 'message') continue;
 
     if (event.message.type === 'text') {
