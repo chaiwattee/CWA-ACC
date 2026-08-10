@@ -19,7 +19,6 @@ const blobClient = new line.messagingApi.MessagingApiBlobClient({
 
 const CATEGORIES = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'อื่นๆ'];
 
-// ส่งรูป slip เข้า Claude API ให้ช่วยอ่านและดึงข้อมูลออกมาเป็น JSON
 async function readSlip(imageBuffer) {
   const base64Image = imageBuffer.toString('base64');
 
@@ -53,19 +52,16 @@ async function readSlip(imageBuffer) {
 
   const data = await response.json();
 
-  // ถ้า Anthropic API ตอบ error กลับมา (เช่น API key ผิด, เครดิตหมด) ให้โยน error พร้อมรายละเอียด
   if (!response.ok) {
     throw new Error(`Anthropic API error (${response.status}): ${JSON.stringify(data)}`);
   }
 
   let text = data.content[0].text.trim();
-  // เผื่อ Claude ตอบมาแบบมี ```json ... ``` ครอบ ให้ตัดออกก่อน parse
   text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
 
   return JSON.parse(text);
 }
 
-// สร้างปุ่ม quick reply หมวดหมู่ พร้อมฝังข้อมูลรายการไว้ใน postback data
 function buildCategoryQuickReply(slip) {
   const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&dt=${slip.datetime}`;
   return {
@@ -81,18 +77,101 @@ function buildCategoryQuickReply(slip) {
   };
 }
 
-// จุดที่ LINE จะยิง request มาทุกครั้งที่มีข้อความ/รูปเข้ามาในแชท
+function startOfThisMonth() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+}
+
+async function summarizeAll() {
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('account_no, type, amount')
+    .gte('transaction_datetime', startOfThisMonth());
+
+  if (error) throw error;
+
+  let income = 0;
+  let expense = 0;
+  const byAccount = {};
+
+  for (const row of data) {
+    const acc = row.account_no;
+    if (!byAccount[acc]) byAccount[acc] = { income: 0, expense: 0 };
+    if (row.type === 'income') {
+      income += Number(row.amount);
+      byAccount[acc].income += Number(row.amount);
+    } else {
+      expense += Number(row.amount);
+      byAccount[acc].expense += Number(row.amount);
+    }
+  }
+
+  const text = `สรุปเดือนนี้ (รวมทุกบัญชี)\nรับ: ${income.toLocaleString()} บาท\nจ่าย: ${expense.toLocaleString()} บาท\nคงเหลือ: ${(income - expense).toLocaleString()} บาท`;
+
+  const accounts = Object.keys(byAccount);
+  const quickReply = accounts.length
+    ? {
+        items: accounts.slice(0, 13).map((acc) => ({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: `ดู ${acc}`,
+            data: `action=drill&acc=${encodeURIComponent(acc)}`,
+            displayText: `ดูบัญชี ${acc}`,
+          },
+        })),
+      }
+    : undefined;
+
+  return { text, quickReply };
+}
+
+async function summarizeAccount(accountNo) {
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('type, amount')
+    .eq('account_no', accountNo)
+    .gte('transaction_datetime', startOfThisMonth());
+
+  if (error) throw error;
+
+  let income = 0;
+  let expense = 0;
+  for (const row of data) {
+    if (row.type === 'income') income += Number(row.amount);
+    else expense += Number(row.amount);
+  }
+
+  return `บัญชี ${accountNo} เดือนนี้\nรับ: ${income.toLocaleString()} บาท\nจ่าย: ${expense.toLocaleString()} บาท\nคงเหลือ: ${(income - expense).toLocaleString()} บาท`;
+}
+
 app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
   console.log(JSON.stringify(events, null, 2));
 
-  // ตอบ 200 กลับให้ LINE ก่อนทันที ไม่ต้องรอ logic ข้างล่างทำงานเสร็จ
   res.sendStatus(200);
 
   for (const event of events) {
     if (event.type === 'postback') {
-      // แกะข้อมูลที่ฝังไว้ใน postback data ตอนกดปุ่มหมวดหมู่
       const params = new URLSearchParams(event.postback.data);
+
+      if (params.get('action') === 'drill') {
+        try {
+          const text = await summarizeAccount(params.get('acc'));
+          await client.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text }],
+          });
+        } catch (err) {
+          console.error('สรุปแยกบัญชีไม่สำเร็จ:', err.message);
+          await client.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: 'สรุปยอดไม่สำเร็จ ลองใหม่อีกครั้งได้ไหม' }],
+          });
+        }
+        continue;
+      }
+
       const record = {
         account_no: params.get('acc'),
         type: params.get('type'),
@@ -127,6 +206,23 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
     if (event.type !== 'message') continue;
 
     if (event.message.type === 'text') {
+      if (event.message.text === 'สรุปเดือนนี้') {
+        try {
+          const { text, quickReply } = await summarizeAll();
+          await client.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text, quickReply }],
+          });
+        } catch (err) {
+          console.error('สรุปยอดไม่สำเร็จ:', err.message);
+          await client.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: 'สรุปยอดไม่สำเร็จ ลองใหม่อีกครั้งได้ไหม' }],
+          });
+        }
+        continue;
+      }
+
       await client.replyMessage({
         replyToken: event.replyToken,
         messages: [
@@ -170,7 +266,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
-// หน้าเช็คว่า service รันอยู่ (เปิดผ่านเบราว์เซอร์ดูได้)
 app.get('/', (req, res) => {
   res.send('CWA-ACC bot is running');
 });
