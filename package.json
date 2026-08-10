@@ -1,0 +1,13 @@
+{
+  "name": "cwa-acc",
+  "version": "1.0.0",
+  "description": "LINE bot backend - personal income/expense tracker",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "@line/bot-sdk": "^9.5.1"
+  }
+}
