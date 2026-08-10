@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "LINE bot backend - personal income/expense tracker",
   "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node index.js"
   },

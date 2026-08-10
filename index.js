@@ -16,6 +16,7 @@ const blobClient = new line.messagingApi.MessagingApiBlobClient({
 
 const CATEGORIES = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'อื่นๆ'];
 
+// ส่งรูป slip เข้า Claude API ให้ช่วยอ่านและดึงข้อมูลออกมาเป็น JSON
 async function readSlip(imageBuffer) {
   const base64Image = imageBuffer.toString('base64');
 
@@ -39,7 +40,7 @@ async function readSlip(imageBuffer) {
             },
             {
               type: 'text',
-              text: 'อ่านรูป slip โอนเงินนี้ แล้วตอบกลับเป็น JSON เท่านั้น (ไม่มีคำอธิบายอื่น) รูปแบบ: {"type":"income หรือ expense","amount":ตัวเลข,"account_no":"เลขบัญชีปลายทางหรือต้นทางที่เป็นของเรา เช่น X-8718","counterparty":"ชื่อ/บัญชีอีกฝั่ง","datetime":"YYYY-MM-DD HH:mm"}',
+              text: 'อ่านรูป slip โอนเงินนี้ แล้วตอบกลับเป็น JSON เท่านั้น ห้ามมี markdown code fence ห้ามมีคำอธิบายอื่นใดๆ ทั้งสิ้น รูปแบบ: {"type":"income หรือ expense","amount":ตัวเลข,"account_no":"เลขบัญชีปลายทางหรือต้นทางที่เป็นของเรา เช่น X-8718","counterparty":"ชื่อ/บัญชีอีกฝั่ง","datetime":"YYYY-MM-DD HH:mm"}',
             },
           ],
         },
@@ -48,10 +49,20 @@ async function readSlip(imageBuffer) {
   });
 
   const data = await response.json();
-  const text = data.content[0].text;
+
+  // ถ้า Anthropic API ตอบ error กลับมา (เช่น API key ผิด, เครดิตหมด) ให้โยน error พร้อมรายละเอียด
+  if (!response.ok) {
+    throw new Error(`Anthropic API error (${response.status}): ${JSON.stringify(data)}`);
+  }
+
+  let text = data.content[0].text.trim();
+  // เผื่อ Claude ตอบมาแบบมี ```json ... ``` ครอบ ให้ตัดออกก่อน parse
+  text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
+
   return JSON.parse(text);
 }
 
+// สร้างปุ่ม quick reply หมวดหมู่ พร้อมฝังข้อมูลรายการไว้ใน postback data
 function buildCategoryQuickReply(slip) {
   const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&dt=${slip.datetime}`;
   return {
@@ -67,10 +78,12 @@ function buildCategoryQuickReply(slip) {
   };
 }
 
+// จุดที่ LINE จะยิง request มาทุกครั้งที่มีข้อความ/รูปเข้ามาในแชท
 app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
   console.log(JSON.stringify(events, null, 2));
 
+  // ตอบ 200 กลับให้ LINE ก่อนทันที ไม่ต้องรอ logic ข้างล่างทำงานเสร็จ
   res.sendStatus(200);
 
   for (const event of events) {
@@ -110,7 +123,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           ],
         });
       } catch (err) {
-        console.error('อ่านรูปไม่สำเร็จ:', err);
+        console.error('อ่านรูปไม่สำเร็จ:', err.message);
         await client.replyMessage({
           replyToken: event.replyToken,
           messages: [{ type: 'text', text: 'อ่านรูปนี้ไม่สำเร็จ ลองส่งใหม่อีกครั้งได้ไหม' }],
@@ -120,6 +133,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
+// หน้าเช็คว่า service รันอยู่ (เปิดผ่านเบราว์เซอร์ดูได้)
 app.get('/', (req, res) => {
   res.send('CWA-ACC bot is running');
 });
