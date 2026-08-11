@@ -19,6 +19,7 @@ const blobClient = new line.messagingApi.MessagingApiBlobClient({
 
 const CATEGORIES = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'อื่นๆ'];
 
+// ส่งรูป slip เข้า Claude API ให้ช่วยอ่านและดึงข้อมูลออกมาเป็น JSON
 async function readSlip(imageBuffer) {
   const base64Image = imageBuffer.toString('base64');
 
@@ -52,16 +53,19 @@ async function readSlip(imageBuffer) {
 
   const data = await response.json();
 
+  // ถ้า Anthropic API ตอบ error กลับมา (เช่น API key ผิด, เครดิตหมด) ให้โยน error พร้อมรายละเอียด
   if (!response.ok) {
     throw new Error(`Anthropic API error (${response.status}): ${JSON.stringify(data)}`);
   }
 
   let text = data.content[0].text.trim();
+  // เผื่อ Claude ตอบมาแบบมี ```json ... ``` ครอบ ให้ตัดออกก่อน parse
   text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
 
   return JSON.parse(text);
 }
 
+// สร้างปุ่ม quick reply หมวดหมู่ พร้อมฝังข้อมูลรายการไว้ใน postback data
 function buildCategoryQuickReply(slip) {
   const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&dt=${slip.datetime}`;
   return {
@@ -77,11 +81,13 @@ function buildCategoryQuickReply(slip) {
   };
 }
 
+// คำนวณวันที่ 1 ของเดือนปัจจุบัน (ISO string) ใช้กรองข้อมูลเดือนนี้
 function startOfThisMonth() {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 }
 
+// สรุปยอดรวมทุกบัญชี พร้อมปุ่มดูแยกบัญชี
 async function summarizeAll() {
   const { data, error } = await supabase
     .from('transactions')
@@ -126,6 +132,7 @@ async function summarizeAll() {
   return { text, quickReply };
 }
 
+// สรุปยอดเฉพาะบัญชีเดียว (drill-down)
 async function summarizeAccount(accountNo) {
   const { data, error } = await supabase
     .from('transactions')
@@ -145,16 +152,19 @@ async function summarizeAccount(accountNo) {
   return `บัญชี ${accountNo} เดือนนี้\nรับ: ${income.toLocaleString()} บาท\nจ่าย: ${expense.toLocaleString()} บาท\nคงเหลือ: ${(income - expense).toLocaleString()} บาท`;
 }
 
+
 app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
   console.log(JSON.stringify(events, null, 2));
 
+  // ตอบ 200 กลับให้ LINE ก่อนทันที ไม่ต้องรอ logic ข้างล่างทำงานเสร็จ
   res.sendStatus(200);
 
   for (const event of events) {
     if (event.type === 'postback') {
       const params = new URLSearchParams(event.postback.data);
 
+      // กรณีกดปุ่ม "ดู X-xxxx" เพื่อ drill-down ดูแยกบัญชี
       if (params.get('action') === 'drill') {
         try {
           const text = await summarizeAccount(params.get('acc'));
@@ -172,6 +182,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
+      // กรณีกดปุ่มเลือกหมวดหมู่หลังอ่านรูป slip
       const record = {
         account_no: params.get('acc'),
         type: params.get('type'),
@@ -206,6 +217,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
     if (event.type !== 'message') continue;
 
     if (event.message.type === 'text') {
+      // ปุ่ม Rich Menu ส่งข้อความนี้เข้ามาเวลากด "สรุปยอด"
       if (event.message.text === 'สรุปเดือนนี้') {
         try {
           const { text, quickReply } = await summarizeAll();
@@ -235,12 +247,14 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
     }
 
     if (event.message.type === 'image') {
-      const stream = await blobClient.getMessageContent(event.message.id);
-      const chunks = [];
-      for await (const chunk of stream) chunks.push(chunk);
-      const imageBuffer = Buffer.concat(chunks);
-
       try {
+        console.log('เริ่มดาวน์โหลดรูป messageId:', event.message.id);
+        const stream = await blobClient.getMessageContent(event.message.id);
+        const chunks = [];
+        for await (const chunk of stream) chunks.push(chunk);
+        const imageBuffer = Buffer.concat(chunks);
+        console.log(`ดาวน์โหลดรูปสำเร็จ ขนาด ${imageBuffer.length} bytes`);
+
         const slip = await readSlip(imageBuffer);
         console.log('อ่านได้:', slip);
 
@@ -256,7 +270,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           ],
         });
       } catch (err) {
-        console.error('อ่านรูปไม่สำเร็จ:', err.message);
+        console.error('อ่านรูปไม่สำเร็จ:', err.message, err.stack);
         await client.replyMessage({
           replyToken: event.replyToken,
           messages: [{ type: 'text', text: 'อ่านรูปนี้ไม่สำเร็จ ลองส่งใหม่อีกครั้งได้ไหม' }],
@@ -266,6 +280,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
+// หน้าเช็คว่า service รันอยู่ (เปิดผ่านเบราว์เซอร์ดูได้)
 app.get('/', (req, res) => {
   res.send('CWA-ACC bot is running');
 });
