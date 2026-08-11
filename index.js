@@ -223,17 +223,21 @@ async function buildWeeklyExcelBuffer(transactions) {
   }
 
   sheet.addRow({});
-  const bankHeaderRow = sheet.addRow({ datetime: 'สรุปยอดจ่ายแยกตามธนาคาร' });
+  const bankHeaderRow = sheet.addRow({ datetime: 'สรุปยอดแยกตามธนาคาร' });
   bankHeaderRow.font = { bold: true };
 
   const byBank = {};
   for (const t of transactions) {
-    if (t.type !== 'expense') continue;
     const bank = t.bank || 'ไม่ระบุ';
-    byBank[bank] = (byBank[bank] || 0) + Number(t.amount);
+    if (!byBank[bank]) byBank[bank] = { income: 0, expense: 0 };
+    if (t.type === 'income') byBank[bank].income += Number(t.amount);
+    else byBank[bank].expense += Number(t.amount);
   }
-  for (const [bank, amt] of Object.entries(byBank)) {
-    sheet.addRow({ datetime: bank, amount: amt });
+  for (const [bank, sums] of Object.entries(byBank)) {
+    const bankNameRow = sheet.addRow({ datetime: bank });
+    bankNameRow.font = { italic: true };
+    sheet.addRow({ type: 'รับ', amount: sums.income });
+    sheet.addRow({ type: 'จ่าย', amount: sums.expense });
   }
 
   return { buffer: await workbook.xlsx.writeBuffer(), income, expense };
