@@ -78,9 +78,15 @@ function buildCategoryQuickReply(slip) {
   };
 }
 
+function bangkokNow() {
+  return new Date(Date.now() + 7 * 60 * 60 * 1000);
+}
+
 function startOfThisMonth() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const now = bangkokNow();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    .toISOString()
+    .slice(0, 19);
 }
 
 async function summarizeAll() {
@@ -147,10 +153,9 @@ async function summarizeAccount(accountNo) {
 }
 
 function last7DaysRange() {
-  const end = new Date();
-  const start = new Date();
-  start.setDate(start.getDate() - 7);
-  return { start: start.toISOString(), end: end.toISOString() };
+  const end = bangkokNow();
+  const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+  return { start: start.toISOString().slice(0, 19), end: end.toISOString().slice(0, 19) };
 }
 
 async function buildWeeklyExcelBuffer(transactions) {
