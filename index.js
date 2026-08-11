@@ -66,6 +66,11 @@ async function readSlip(imageBuffer) {
     throw new Error(`Anthropic API error (${response.status}): ${JSON.stringify(data)}`);
   }
 
+  if (!data.content || !data.content[0] || typeof data.content[0].text !== 'string') {
+    console.error('Anthropic ตอบกลับไม่มีข้อความ:', JSON.stringify(data));
+    throw new Error('AI ไม่สามารถอ่านรูปนี้ได้ (ไม่มีข้อความตอบกลับ)');
+  }
+
   let text = data.content[0].text.trim();
   console.log('AI ตอบดิบ:', text);
   text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
