@@ -1,6 +1,7 @@
 const express = require('express');
 const line = require('@line/bot-sdk');
 const { createClient } = require('@supabase/supabase-js');
+const ExcelJS = require('exceljs');
 
 const config = {
   channelSecret: process.env.CHANNEL_SECRET,
@@ -153,6 +154,90 @@ async function summarizeAccount(accountNo) {
 }
 
 
+// คำนวณช่วง 7 วันล่าสุด (ย้อนหลังจากตอนนี้)
+function last7DaysRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 7);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+// สร้างไฟล์ Excel จากรายการธุรกรรม (แต่ละแถว + ยอดรวมท้ายตาราง)
+async function buildWeeklyExcelBuffer(transactions) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('สรุปรายสัปดาห์');
+
+  sheet.columns = [
+    { header: 'วันที่/เวลา', key: 'datetime', width: 20 },
+    { header: 'บัญชี', key: 'account', width: 14 },
+    { header: 'ประเภท', key: 'type', width: 10 },
+    { header: 'จำนวนเงิน', key: 'amount', width: 14 },
+    { header: 'หมวดหมู่', key: 'category', width: 16 },
+    { header: 'คู่กรณี', key: 'counterparty', width: 24 },
+  ];
+  sheet.getRow(1).font = { bold: true };
+
+  let income = 0;
+  let expense = 0;
+
+  for (const t of transactions) {
+    sheet.addRow({
+      datetime: t.transaction_datetime,
+      account: t.account_no,
+      type: t.type === 'income' ? 'รับ' : 'จ่าย',
+      amount: Number(t.amount),
+      category: t.category,
+      counterparty: t.counterparty || '',
+    });
+    if (t.type === 'income') income += Number(t.amount);
+    else expense += Number(t.amount);
+  }
+
+  sheet.addRow({});
+  const totalRow = sheet.addRow({ datetime: 'ยอดรวม', type: 'รับ', amount: income });
+  totalRow.font = { bold: true };
+  const expenseRow = sheet.addRow({ type: 'จ่าย', amount: expense });
+  expenseRow.font = { bold: true };
+  const balanceRow = sheet.addRow({ type: 'คงเหลือ', amount: income - expense });
+  balanceRow.font = { bold: true };
+
+  return { buffer: await workbook.xlsx.writeBuffer(), income, expense };
+}
+
+// สร้างไฟล์ Excel สรุป 7 วันล่าสุด อัปโหลดขึ้น Supabase Storage แล้วคืนลิงก์ดาวน์โหลด
+async function generateWeeklyExcelReport() {
+  const { start, end } = last7DaysRange();
+
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('*')
+    .gte('transaction_datetime', start)
+    .lte('transaction_datetime', end)
+    .order('transaction_datetime', { ascending: true });
+
+  if (error) throw error;
+
+  const { buffer, income, expense } = await buildWeeklyExcelBuffer(data);
+
+  const fileName = `weekly-${Date.now()}.xlsx`;
+  const { error: uploadError } = await supabase.storage
+    .from('exports')
+    .upload(fileName, buffer, {
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+  if (uploadError) throw uploadError;
+
+  const { data: publicUrlData } = supabase.storage.from('exports').getPublicUrl(fileName);
+
+  return {
+    url: publicUrlData.publicUrl,
+    income,
+    expense,
+    count: data.length,
+  };
+}
+
 app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
   console.log(JSON.stringify(events, null, 2));
@@ -235,6 +320,24 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
+      if (event.message.text === 'สรุปสัปดาห์') {
+        try {
+          const report = await generateWeeklyExcelReport();
+          const text = `สรุป 7 วันล่าสุด (${report.count} รายการ)\nรับ: ${report.income.toLocaleString()} บาท\nจ่าย: ${report.expense.toLocaleString()} บาท\nคงเหลือ: ${(report.income - report.expense).toLocaleString()} บาท\n\nดาวน์โหลด Excel:\n${report.url}`;
+          await client.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text }],
+          });
+        } catch (err) {
+          console.error('สร้างสรุปสัปดาห์ไม่สำเร็จ:', err.message);
+          await client.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: 'สร้างสรุปไม่สำเร็จ ลองใหม่อีกครั้งได้ไหม' }],
+          });
+        }
+        continue;
+      }
+
       await client.replyMessage({
         replyToken: event.replyToken,
         messages: [
@@ -283,6 +386,28 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 // หน้าเช็คว่า service รันอยู่ (เปิดผ่านเบราว์เซอร์ดูได้)
 app.get('/', (req, res) => {
   res.send('CWA-ACC bot is running');
+});
+
+// จุดที่ Render Cron Job จะยิงเข้ามาทุกคืนวันอาทิตย์ เพื่อส่งสรุปรายสัปดาห์แบบ push (ไม่มี replyToken)
+app.get('/cron/weekly-summary', async (req, res) => {
+  if (req.query.key !== process.env.CRON_SECRET) {
+    return res.sendStatus(401);
+  }
+
+  try {
+    const report = await generateWeeklyExcelReport();
+    const text = `สรุป 7 วันล่าสุด (${report.count} รายการ)\nรับ: ${report.income.toLocaleString()} บาท\nจ่าย: ${report.expense.toLocaleString()} บาท\nคงเหลือ: ${(report.income - report.expense).toLocaleString()} บาท\n\nดาวน์โหลด Excel:\n${report.url}`;
+
+    await client.pushMessage({
+      to: process.env.LINE_USER_ID,
+      messages: [{ type: 'text', text }],
+    });
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('ส่งสรุปรายสัปดาห์อัตโนมัติไม่สำเร็จ:', err.message);
+    res.sendStatus(500);
+  }
 });
 
 const port = process.env.PORT || 3000;
