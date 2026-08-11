@@ -221,14 +221,14 @@ async function generateWeeklyExcelReport() {
 
   const fileName = `weekly-${Date.now()}.xlsx`;
   const { error: uploadError } = await supabase.storage
-    .from('exports')
+    .from('CWA')
     .upload(fileName, buffer, {
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
 
   if (uploadError) throw uploadError;
 
-  const { data: publicUrlData } = supabase.storage.from('exports').getPublicUrl(fileName);
+  const { data: publicUrlData } = supabase.storage.from('CWA').getPublicUrl(fileName);
 
   return {
     url: publicUrlData.publicUrl,
