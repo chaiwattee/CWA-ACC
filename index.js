@@ -18,7 +18,7 @@ const blobClient = new line.messagingApi.MessagingApiBlobClient({
   channelAccessToken: config.channelAccessToken,
 });
 
-const CATEGORIES = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'อื่นๆ'];
+const CATEGORIES = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'ชาร์จรถ', 'ค่าขนมลูก', 'ค่าเทอมลูก', 'อื่นๆ'];
 
 async function readSlip(imageBuffer) {
   const base64Image = imageBuffer.toString('base64');
