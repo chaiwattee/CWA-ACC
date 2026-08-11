@@ -31,7 +31,7 @@ async function readSlip(imageBuffer) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-5',
       max_tokens: 300,
       messages: [
         {
@@ -45,14 +45,14 @@ async function readSlip(imageBuffer) {
               type: 'text',
               text: `อ่านรูป slip โอนเงินนี้ แล้วตอบกลับเป็น JSON เท่านั้น ห้ามมี markdown code fence ห้ามมีคำอธิบายอื่นใดๆ ทั้งสิ้น วันนี้คือ ${new Date().toISOString().slice(0, 10)} (ค.ศ.)
 
-กฎการอ่านวันที่: ถ้าสลิปแสดงปีเป็น พ.ศ. (เช่น 2569 หรือย่อเป็น 69) ให้แปลงเป็น ค.ศ. โดยลบ 543 เสมอ (พ.ศ. 2569 = ค.ศ. 2026) และอ่านเดือนจากชื่อเดือนไทยให้ถูกต้อง (ม.ค.=01, ก.พ.=02, มี.ค.=03, เม.ย.=04, พ.ค.=05, มิ.ย.=06, ก.ค.=07, ส.ค.=08, ก.ย.=09, ต.ค.=10, พ.ย.=11, ธ.ค.=12)
+กฎการอ่านวันที่ (อ่านทีละขั้นตอน อย่าข้าม): ขั้นที่ 1 หาตัวเลขวัน หาชื่อเดือนภาษาไทย (เต็มหรือย่อ) และตัวเลขปีในภาพให้ครบทั้ง 3 ส่วนก่อน ขั้นที่ 2 แปลงชื่อเดือนไทยเป็นตัวเลขตามตารางนี้เท่านั้น (ห้ามเดาเอง): มกราคม/ม.ค.=01, กุมภาพันธ์/ก.พ.=02, มีนาคม/มี.ค.=03, เมษายน/เม.ย.=04, พฤษภาคม/พ.ค.=05, มิถุนายน/มิ.ย.=06, กรกฎาคม/ก.ค.=07, สิงหาคม/ส.ค.=08, กันยายน/ก.ย.=09, ตุลาคม/ต.ค.=10, พฤศจิกายน/พ.ย.=11, ธันวาคม/ธ.ค.=12 ขั้นที่ 3 ถ้าตัวเลขปีมี 4 หลักและมากกว่า 2500 หรือมี 2 หลักแล้วเทียบเท่า พ.ศ. ให้ลบ 543 เพื่อแปลงเป็น ค.ศ.
 
-กฎการอ่านทิศทางเงิน (สำคัญมาก อ่านให้ละเอียด):
-- ถ้าสลิปมีคำว่า "รายการเงินเข้า" หรือมีเครื่องหมาย + หน้าจำนวนเงิน → type เป็น "income" บัญชีที่แสดงเป็น "เข้าบัญชี" คือบัญชีของเรา (account_no) ส่วนบัญชี "จากบัญชี" คือ counterparty
-- ถ้าสลิปมีคำว่า "รายการเงินออก" หรือมีเครื่องหมาย - หน้าจำนวนเงิน → type เป็น "expense" บัญชีที่แสดงเป็น "จากบัญชี" คือบัญชีของเรา (account_no) ส่วนบัญชี "เข้าบัญชี" คือ counterparty
-- ถ้าสลิปเป็นแบบ "โอนเงินสำเร็จ" ที่แสดงบัญชีต้นทาง (จาก) ก่อน แล้วตามด้วยบัญชีปลายทาง (ถึง/ไปยัง) โดยไม่มีคำว่าเงินเข้า/เงินออก ให้ถือว่านี่คือการโอนเงินออกจากบัญชีต้นทาง (type เป็น "expense" เสมอ เพราะเป็นสลิปที่มาจากแอปธนาคารของผู้โอนเอง) บัญชีต้นทาง (บัญชีแรกที่แสดง) คือบัญชีของเรา (account_no) ส่วนบัญชีปลายทาง (บัญชีที่สอง) คือ counterparty
+กฎการอ่านทิศทางเงิน (สำคัญที่สุด อ่านให้ละเอียดทีละบรรทัด อย่าด่วนสรุปว่าเป็น income):
+1. หาคำว่า "รายการเงินเข้า" หรือ "รายการเงินออก" ในภาพก่อน ถ้าเจอ ให้ใช้คำนั้นตัดสิน (เงินเข้า=income, เงินออก=expense) แล้วข้ามข้อ 2-3 ไปเลย
+2. ถ้าไม่เจอคำนั้น ให้หาคำว่า "โอนเงินสำเร็จ" แทน ถ้าเจอคำนี้ **ให้ตอบ type เป็น "expense" เสมอโดยไม่มีข้อยกเว้น** เพราะสลิปแบบนี้คือหน้าจอยืนยันหลังผู้ใช้กดโอนเงินออกจากแอปธนาคารของตัวเอง บัญชีแรกที่แสดง (มักอยู่บนสุด ก่อนลูกศรหรือคำว่า "ไปยัง"/"ถึง") คือบัญชีของเรา (account_no) ส่วนบัญชีที่สองคือ counterparty
+3. ถ้าไม่เจอทั้งสองคำนี้เลย ให้สังเกตเครื่องหมาย + หรือ - หน้าจำนวนเงินแทน (+ = income, - = expense)
 
-รูปแบบคำตอบ: {"type":"income หรือ expense","amount":ตัวเลข,"account_no":"เลขบัญชีของเรา เช่น X-8718 หรือ XXX-X-XX883-7","counterparty":"ชื่อ/บัญชีอีกฝั่ง","datetime":"YYYY-MM-DD HH:mm"}`,
+รูปแบบคำตอบ: {"type":"income หรือ expense","amount":ตัวเลข,"account_no":"เลขบัญชีของเรา เช่น X-8718 หรือ XXX-X-XX883-7","bank":"ชื่อธนาคารของบัญชีเรา อ่านจากโลโก้/ชื่อในภาพ เช่น ไทยพาณิชย์, กสิกรไทย, กรุงเทพ, กรุงไทย, ทหารไทยธนชาต, กรุงศรี ถ้าไม่แน่ใจให้ตอบ ไม่ทราบ","counterparty":"ชื่อ/บัญชีอีกฝั่ง","datetime":"YYYY-MM-DD HH:mm"}`,
             },
           ],
         },
@@ -67,13 +67,14 @@ async function readSlip(imageBuffer) {
   }
 
   let text = data.content[0].text.trim();
+  console.log('AI ตอบดิบ:', text);
   text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
 
   return JSON.parse(text);
 }
 
 function buildCategoryQuickReply(slip) {
-  const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&dt=${slip.datetime}`;
+  const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&bank=${encodeURIComponent(slip.bank || '')}&dt=${slip.datetime}`;
   return {
     items: CATEGORIES.map((cat) => ({
       type: 'action',
@@ -174,6 +175,7 @@ async function buildWeeklyExcelBuffer(transactions) {
   sheet.columns = [
     { header: 'วันที่/เวลา', key: 'datetime', width: 20 },
     { header: 'บัญชี', key: 'account', width: 14 },
+    { header: 'ธนาคาร', key: 'bank', width: 16 },
     { header: 'ประเภท', key: 'type', width: 10 },
     { header: 'จำนวนเงิน', key: 'amount', width: 14 },
     { header: 'หมวดหมู่', key: 'category', width: 16 },
@@ -188,6 +190,7 @@ async function buildWeeklyExcelBuffer(transactions) {
     sheet.addRow({
       datetime: t.transaction_datetime,
       account: t.account_no,
+      bank: t.bank || '',
       type: t.type === 'income' ? 'รับ' : 'จ่าย',
       amount: Number(t.amount),
       category: t.category,
@@ -284,6 +287,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 
       const record = {
         account_no: params.get('acc'),
+        bank: params.get('bank') || null,
         type: params.get('type'),
         amount: parseFloat(params.get('amt')),
         category: params.get('cat'),
@@ -326,7 +330,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           messages: [
             {
               type: 'text',
-              text: `บันทึกแล้ว: ${typeLabel} ${record.amount} บาท หมวด${record.category}`,
+              text: `บันทึกแล้ว: ${typeLabel} ${record.amount} บาท (${record.bank || 'ไม่ทราบธนาคาร'}) หมวด${record.category}`,
             },
           ],
         });
@@ -401,7 +405,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
           messages: [
             {
               type: 'text',
-              text: `${typeLabel} ${slip.amount} บาท\nบัญชี: ${slip.account_no}\nกับ: ${slip.counterparty}\nเวลา: ${slip.datetime}\n\nเลือกหมวดหมู่:`,
+              text: `${typeLabel} ${slip.amount} บาท\nธนาคาร: ${slip.bank || 'ไม่ทราบ'}\nบัญชี: ${slip.account_no}\nกับ: ${slip.counterparty}\nเวลา: ${slip.datetime}\n\nเลือกหมวดหมู่:`,
               quickReply: buildCategoryQuickReply(slip),
             },
           ],
