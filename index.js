@@ -222,6 +222,20 @@ async function buildWeeklyExcelBuffer(transactions) {
     sheet.addRow({ datetime: cat, amount: amt });
   }
 
+  sheet.addRow({});
+  const bankHeaderRow = sheet.addRow({ datetime: 'สรุปยอดจ่ายแยกตามธนาคาร' });
+  bankHeaderRow.font = { bold: true };
+
+  const byBank = {};
+  for (const t of transactions) {
+    if (t.type !== 'expense') continue;
+    const bank = t.bank || 'ไม่ระบุ';
+    byBank[bank] = (byBank[bank] || 0) + Number(t.amount);
+  }
+  for (const [bank, amt] of Object.entries(byBank)) {
+    sheet.addRow({ datetime: bank, amount: amt });
+  }
+
   return { buffer: await workbook.xlsx.writeBuffer(), income, expense };
 }
 
