@@ -20,7 +20,6 @@ const blobClient = new line.messagingApi.MessagingApiBlobClient({
 
 const CATEGORIES = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'อื่นๆ'];
 
-// ส่งรูป slip เข้า Claude API ให้ช่วยอ่านและดึงข้อมูลออกมาเป็น JSON
 async function readSlip(imageBuffer) {
   const base64Image = imageBuffer.toString('base64');
 
@@ -44,7 +43,7 @@ async function readSlip(imageBuffer) {
             },
             {
               type: 'text',
-              text: 'อ่านรูป slip โอนเงินนี้ แล้วตอบกลับเป็น JSON เท่านั้น ห้ามมี markdown code fence ห้ามมีคำอธิบายอื่นใดๆ ทั้งสิ้น รูปแบบ: {"type":"income หรือ expense","amount":ตัวเลข,"account_no":"เลขบัญชีปลายทางหรือต้นทางที่เป็นของเรา เช่น X-8718","counterparty":"ชื่อ/บัญชีอีกฝั่ง","datetime":"YYYY-MM-DD HH:mm"}',
+              text: `อ่านรูป slip โอนเงินนี้ แล้วตอบกลับเป็น JSON เท่านั้น ห้ามมี markdown code fence ห้ามมีคำอธิบายอื่นใดๆ ทั้งสิ้น วันนี้คือ ${new Date().toISOString().slice(0, 10)} ให้อ่านวันที่ในรูปตามที่ระบุไว้จริงในสลิปอย่างระมัดระวัง (มักเป็นรูปแบบ วัน/เดือน/ปี ของไทย) อย่าเดาหรือสลับเดือนกับวันโดยไม่มีเหตุผล รูปแบบคำตอบ: {"type":"income หรือ expense","amount":ตัวเลข,"account_no":"เลขบัญชีปลายทางหรือต้นทางที่เป็นของเรา เช่น X-8718","counterparty":"ชื่อ/บัญชีอีกฝั่ง","datetime":"YYYY-MM-DD HH:mm"}`,
             },
           ],
         },
@@ -54,19 +53,16 @@ async function readSlip(imageBuffer) {
 
   const data = await response.json();
 
-  // ถ้า Anthropic API ตอบ error กลับมา (เช่น API key ผิด, เครดิตหมด) ให้โยน error พร้อมรายละเอียด
   if (!response.ok) {
     throw new Error(`Anthropic API error (${response.status}): ${JSON.stringify(data)}`);
   }
 
   let text = data.content[0].text.trim();
-  // เผื่อ Claude ตอบมาแบบมี ```json ... ``` ครอบ ให้ตัดออกก่อน parse
   text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
 
   return JSON.parse(text);
 }
 
-// สร้างปุ่ม quick reply หมวดหมู่ พร้อมฝังข้อมูลรายการไว้ใน postback data
 function buildCategoryQuickReply(slip) {
   const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&dt=${slip.datetime}`;
   return {
@@ -82,13 +78,11 @@ function buildCategoryQuickReply(slip) {
   };
 }
 
-// คำนวณวันที่ 1 ของเดือนปัจจุบัน (ISO string) ใช้กรองข้อมูลเดือนนี้
 function startOfThisMonth() {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 }
 
-// สรุปยอดรวมทุกบัญชี พร้อมปุ่มดูแยกบัญชี
 async function summarizeAll() {
   const { data, error } = await supabase
     .from('transactions')
@@ -133,7 +127,6 @@ async function summarizeAll() {
   return { text, quickReply };
 }
 
-// สรุปยอดเฉพาะบัญชีเดียว (drill-down)
 async function summarizeAccount(accountNo) {
   const { data, error } = await supabase
     .from('transactions')
@@ -153,8 +146,6 @@ async function summarizeAccount(accountNo) {
   return `บัญชี ${accountNo} เดือนนี้\nรับ: ${income.toLocaleString()} บาท\nจ่าย: ${expense.toLocaleString()} บาท\nคงเหลือ: ${(income - expense).toLocaleString()} บาท`;
 }
 
-
-// คำนวณช่วง 7 วันล่าสุด (ย้อนหลังจากตอนนี้)
 function last7DaysRange() {
   const end = new Date();
   const start = new Date();
@@ -162,7 +153,6 @@ function last7DaysRange() {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
-// สร้างไฟล์ Excel จากรายการธุรกรรม (แต่ละแถว + ยอดรวมท้ายตาราง)
 async function buildWeeklyExcelBuffer(transactions) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('สรุปรายสัปดาห์');
@@ -201,10 +191,23 @@ async function buildWeeklyExcelBuffer(transactions) {
   const balanceRow = sheet.addRow({ type: 'คงเหลือ', amount: income - expense });
   balanceRow.font = { bold: true };
 
+  sheet.addRow({});
+  const catHeaderRow = sheet.addRow({ datetime: 'สรุปยอดจ่ายแยกตามหมวดหมู่' });
+  catHeaderRow.font = { bold: true };
+
+  const byCategory = {};
+  for (const t of transactions) {
+    if (t.type !== 'expense') continue;
+    const cat = t.category || 'ไม่ระบุ';
+    byCategory[cat] = (byCategory[cat] || 0) + Number(t.amount);
+  }
+  for (const [cat, amt] of Object.entries(byCategory)) {
+    sheet.addRow({ datetime: cat, amount: amt });
+  }
+
   return { buffer: await workbook.xlsx.writeBuffer(), income, expense };
 }
 
-// สร้างไฟล์ Excel สรุป 7 วันล่าสุด อัปโหลดขึ้น Supabase Storage แล้วคืนลิงก์ดาวน์โหลด
 async function generateWeeklyExcelReport() {
   const { start, end } = last7DaysRange();
 
@@ -242,14 +245,12 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
   console.log(JSON.stringify(events, null, 2));
 
-  // ตอบ 200 กลับให้ LINE ก่อนทันที ไม่ต้องรอ logic ข้างล่างทำงานเสร็จ
   res.sendStatus(200);
 
   for (const event of events) {
     if (event.type === 'postback') {
       const params = new URLSearchParams(event.postback.data);
 
-      // กรณีกดปุ่ม "ดู X-xxxx" เพื่อ drill-down ดูแยกบัญชี
       if (params.get('action') === 'drill') {
         try {
           const text = await summarizeAccount(params.get('acc'));
@@ -267,7 +268,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      // กรณีกดปุ่มเลือกหมวดหมู่หลังอ่านรูป slip
       const record = {
         account_no: params.get('acc'),
         type: params.get('type'),
@@ -275,6 +275,27 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         category: params.get('cat'),
         transaction_datetime: params.get('dt'),
       };
+
+      const { data: existing, error: checkError } = await supabase
+        .from('transactions')
+        .select('id')
+        .eq('account_no', record.account_no)
+        .eq('type', record.type)
+        .eq('amount', record.amount)
+        .eq('transaction_datetime', record.transaction_datetime)
+        .limit(1);
+
+      if (checkError) {
+        console.error('เช็ครายการซ้ำไม่สำเร็จ:', checkError.message);
+      }
+
+      if (existing && existing.length > 0) {
+        await client.replyMessage({
+          replyToken: event.replyToken,
+          messages: [{ type: 'text', text: 'รายการนี้ถูกบันทึกไปแล้ว (ตรวจพบว่าซ้ำกับรายการเดิม จึงไม่บันทึกซ้ำ)' }],
+        });
+        continue;
+      }
 
       const { error } = await supabase.from('transactions').insert(record);
 
@@ -302,7 +323,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
     if (event.type !== 'message') continue;
 
     if (event.message.type === 'text') {
-      // ปุ่ม Rich Menu ส่งข้อความนี้เข้ามาเวลากด "สรุปยอด"
       if (event.message.text === 'สรุปเดือนนี้') {
         try {
           const { text, quickReply } = await summarizeAll();
@@ -383,12 +403,10 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
-// หน้าเช็คว่า service รันอยู่ (เปิดผ่านเบราว์เซอร์ดูได้)
 app.get('/', (req, res) => {
   res.send('CWA-ACC bot is running');
 });
 
-// จุดที่ Render Cron Job จะยิงเข้ามาทุกคืนวันอาทิตย์ เพื่อส่งสรุปรายสัปดาห์แบบ push (ไม่มี replyToken)
 app.get('/cron/weekly-summary', async (req, res) => {
   if (req.query.key !== process.env.CRON_SECRET) {
     return res.sendStatus(401);
