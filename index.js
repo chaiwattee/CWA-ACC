@@ -131,14 +131,14 @@ async function readSlip(imageBuffer) {
 }
 
 function buildCategoryQuickReply(slip) {
-  const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&bank=${encodeURIComponent(slip.bank || '')}&dt=${slip.datetime}`;
+  const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&bank=${encodeURIComponent(slip.bank || '')}&dt=${encodeURIComponent(slip.datetime)}`;
   return {
-    items: CATEGORIES.map((cat) => ({
+    items: CATEGORIES.map((cat, idx) => ({
       type: 'action',
       action: {
         type: 'postback',
         label: cat,
-        data: `${payloadBase}&cat=${encodeURIComponent(cat)}`,
+        data: `${payloadBase}&cat=${idx}`,
         displayText: cat,
       },
     })),
@@ -375,7 +375,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         bank: params.get('bank') || null,
         type: params.get('type'),
         amount: parseFloat(params.get('amt')),
-        category: params.get('cat'),
+        category: CATEGORIES[parseInt(params.get('cat'), 10)] || params.get('cat'),
         transaction_datetime: params.get('dt'),
       };
 
@@ -462,11 +462,20 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
       }
 
       try {
-        const parsed = await readTextTransaction(event.message.text);
-        if (parsed && parsed.is_transaction) {
-          parsed.account_no = normalizeAccountNo(parsed.account_no);
-          if (!parsed.bank || parsed.bank === 'ไม่ทราบ') parsed.bank = 'ไทยพาณิชย์';
-          const typeLabel = parsed.type === 'income' ? 'รับ' : 'จ่าย';
+        // ลองเช็คว่าข้อความนี้เป็นการแจ้งเตือนธุรกรรม (เช่น แจ้งเตือนบัตรเครดิตที่ forward เข้ามา) ไหม ก่อนจะ echo กลับแบบเดิม
+      let parsed = null;
+      try {
+        parsed = await readTextTransaction(event.message.text);
+      } catch (err) {
+        console.error('เช็คข้อความธุรกรรมไม่สำเร็จ:', err.message);
+        // ถ้าเช็คไม่สำเร็จ ให้ตกไป echo ข้อความแบบเดิมด้านล่างแทน ไม่ต้องหยุดทำงาน
+      }
+
+      if (parsed && parsed.is_transaction) {
+        parsed.account_no = normalizeAccountNo(parsed.account_no);
+        if (!parsed.bank || parsed.bank === 'ไม่ทราบ') parsed.bank = 'ไทยพาณิชย์';
+        const typeLabel = parsed.type === 'income' ? 'รับ' : 'จ่าย';
+        try {
           await client.replyMessage({
             replyToken: event.replyToken,
             messages: [
@@ -477,10 +486,10 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
               },
             ],
           });
-          continue;
+        } catch (err) {
+          console.error('ตอบกลับข้อความธุรกรรมไม่สำเร็จ:', err.message);
         }
-      } catch (err) {
-        console.error('เช็คข้อความธุรกรรมไม่สำเร็จ:', err.message);
+        continue;
       }
 
       await client.replyMessage({
