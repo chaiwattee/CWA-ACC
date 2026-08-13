@@ -461,14 +461,11 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
-      try {
-        // ลองเช็คว่าข้อความนี้เป็นการแจ้งเตือนธุรกรรม (เช่น แจ้งเตือนบัตรเครดิตที่ forward เข้ามา) ไหม ก่อนจะ echo กลับแบบเดิม
       let parsed = null;
       try {
         parsed = await readTextTransaction(event.message.text);
       } catch (err) {
         console.error('เช็คข้อความธุรกรรมไม่สำเร็จ:', err.message);
-        // ถ้าเช็คไม่สำเร็จ ให้ตกไป echo ข้อความแบบเดิมด้านล่างแทน ไม่ต้องหยุดทำงาน
       }
 
       if (parsed && parsed.is_transaction) {
