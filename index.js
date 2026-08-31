@@ -20,6 +20,56 @@ const blobClient = new line.messagingApi.MessagingApiBlobClient({
 
 const CATEGORIES = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'ชาร์จรถ', 'ค่าขนมลูก', 'ค่าเทอมลูก', 'จ่ายค่าบัตรเครดิต', 'อื่นๆ'];
 
+// เก็บรายการที่รอให้ผู้ใช้พิมพ์ชื่อหมวดหมู่เอง (กรณีกด "อื่นๆ") คั่นด้วย userId เพราะใช้คนเดียวก็เพียงพอ
+const pendingCategoryInput = {};
+
+// บันทึกรายการลง Supabase พร้อมเช็คซ้ำและตอบกลับ ใช้ร่วมกันทั้งกรณีกดปุ่มหมวดหมู่ปกติและกรณีพิมพ์หมวดหมู่เอง
+async function saveRecord(record, replyToken) {
+  const { data: existing, error: checkError } = await supabase
+    .from('transactions')
+    .select('id')
+    .eq('account_no', record.account_no)
+    .eq('type', record.type)
+    .eq('amount', record.amount)
+    .eq('transaction_datetime', record.transaction_datetime)
+    .limit(1);
+
+  if (checkError) {
+    console.error('เช็ครายการซ้ำไม่สำเร็จ:', checkError.message);
+  }
+
+  if (existing && existing.length > 0) {
+    await client.replyMessage({
+      replyToken,
+      messages: [{ type: 'text', text: 'รายการนี้ถูกบันทึกไปแล้ว (ตรวจพบว่าซ้ำกับรายการเดิม จึงไม่บันทึกซ้ำ)' }],
+    });
+    return;
+  }
+
+  const { error } = await supabase.from('transactions').insert(record);
+
+  if (error) {
+    console.error('บันทึกลง Supabase ไม่สำเร็จ:', error.message);
+    await client.replyMessage({
+      replyToken,
+      messages: [{ type: 'text', text: 'บันทึกไม่สำเร็จ ลองใหม่อีกครั้งได้ไหม' }],
+    });
+  } else {
+    const typeLabel = record.type === 'income' ? 'รับ' : 'จ่าย';
+    await client.replyMessage({
+      replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: `บันทึกแล้ว: ${typeLabel} ${record.amount} บาท (${record.bank || 'ไม่ทราบธนาคาร'}) หมวด${record.category}`,
+        },
+      ],
+    });
+  }
+}
+
+// ส่งรูป slip เข้า Claude API ให้ช่วยอ่านและดึงข้อมูลออกมาเป็น JSON
+// อ่านข้อความแจ้งเตือน (เช่น SMS/แจ้งเตือนบัตรเครดิตที่ forward เข้ามา) ให้ AI ช่วยดึงข้อมูลรายการเป็น JSON
 async function readTextTransaction(text) {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -77,6 +127,7 @@ async function readTextTransaction(text) {
   return JSON.parse(raw);
 }
 
+
 async function readSlip(imageBuffer) {
   const base64Image = imageBuffer.toString('base64');
 
@@ -119,18 +170,22 @@ async function readSlip(imageBuffer) {
 
   const data = await response.json();
 
+  // ถ้า Anthropic API ตอบ error กลับมา (เช่น API key ผิด, เครดิตหมด) ให้โยน error พร้อมรายละเอียด
   if (!response.ok) {
     throw new Error(`Anthropic API error (${response.status}): ${JSON.stringify(data)}`);
   }
 
   let text = data.content[0].text.trim();
   console.log('AI ตอบดิบ:', text);
+  // เผื่อ Claude ตอบมาแบบมี ```json ... ``` ครอบ ให้ตัดออกก่อน parse
   text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
 
   return JSON.parse(text);
 }
 
+// สร้างปุ่ม quick reply หมวดหมู่ พร้อมฝังข้อมูลรายการไว้ใน postback data
 function buildCategoryQuickReply(slip) {
+  // ใช้เลขลำดับหมวดหมู่แทนชื่อเต็ม เพื่อไม่ให้ postback data เกิน 300 ไบต์ที่ LINE จำกัดไว้
   const payloadBase = `amt=${slip.amount}&type=${slip.type}&acc=${slip.account_no}&bank=${encodeURIComponent(slip.bank || '')}&dt=${encodeURIComponent(slip.datetime)}`;
   return {
     items: CATEGORIES.map((cat, idx) => ({
@@ -145,22 +200,64 @@ function buildCategoryQuickReply(slip) {
   };
 }
 
+// แปลงเวลาปัจจุบันเป็นเวลาไทย (UTC+7) แบบ naive string เพื่อเทียบกับข้อมูลที่บันทึกเป็นเวลาไทยตรงๆ
 function bangkokNow() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000);
 }
 
+// ตัดเลขบัญชีให้เหลือแค่ 4 หลักท้าย เพื่อให้บัญชีเดียวกันตรงกันเสมอ ไม่ว่าธนาคารจะโชว์รูปแบบไหน
 function normalizeAccountNo(raw) {
   const digits = (raw || '').replace(/\D/g, '');
   return digits.slice(-4) || raw;
 }
 
-function startOfThisMonth() {
-  const now = bangkokNow();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
-    .toISOString()
-    .slice(0, 19);
+// รายการวันหยุดธนาคารไทยที่ทราบ (ปี 2569/2026) — รวบรวมจากข่าวหลายแหล่ง อาจไม่ครบ 100%
+// แนะนำเช็คซ้ำ/แก้ไขที่ https://www.bot.or.th/th/financial-institutions-holiday.html แล้วอัปเดตรายการนี้ทุกปี
+const THAI_BANK_HOLIDAYS = [
+  '2026-01-01', '2026-01-02',
+  '2026-03-03',
+  '2026-04-06', '2026-04-13', '2026-04-14', '2026-04-15',
+  '2026-05-01', '2026-05-04',
+  '2026-06-01', '2026-06-03',
+  '2026-07-28', '2026-07-29',
+  '2026-08-12',
+  '2026-10-13', '2026-10-16', '2026-10-23',
+  '2026-12-05', '2026-12-07', '2026-12-10', '2026-12-31',
+];
+
+function toDateStr(d) {
+  return d.toISOString().slice(0, 10);
 }
 
+// หาวันทำการสุดท้ายของเดือนที่ระบุ (ตามเวลาไทย) โดยข้ามเสาร์-อาทิตย์และวันหยุดธนาคาร
+function lastBusinessDayOfMonth(year, monthIndex) {
+  let d = new Date(Date.UTC(year, monthIndex + 1, 0)); // วันสุดท้ายตามปฏิทินของเดือน
+  while (true) {
+    const day = d.getUTCDay(); // 0 = อาทิตย์, 6 = เสาร์
+    if (day !== 0 && day !== 6 && !THAI_BANK_HOLIDAYS.includes(toDateStr(d))) break;
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+  return d;
+}
+
+// จุดเริ่มต้นของรอบบัญชีปัจจุบัน นับจากวันทำการสุดท้ายของเดือน (วันเงินเดือนเข้า) แทนวันที่ 1
+function startOfThisMonth() {
+  const now = bangkokNow();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+
+  const currentPayDay = lastBusinessDayOfMonth(y, m);
+  const todayDateOnly = new Date(Date.UTC(y, m, now.getUTCDate()));
+
+  // ถ้าวันนี้ยังไม่ถึง payday ของเดือนนี้ ให้ใช้ payday ของเดือนก่อนหน้าแทน (ยังอยู่ในรอบเดือนที่แล้ว)
+  const payDay = todayDateOnly.getTime() >= currentPayDay.getTime()
+    ? currentPayDay
+    : lastBusinessDayOfMonth(m === 0 ? y - 1 : y, (m + 11) % 12);
+
+  return payDay.toISOString().slice(0, 19);
+}
+
+// สรุปยอดรวมทุกบัญชี พร้อมปุ่มดูแยกบัญชี
 async function summarizeAll() {
   const { data, error } = await supabase
     .from('transactions')
@@ -205,6 +302,7 @@ async function summarizeAll() {
   return { text, quickReply };
 }
 
+// สรุปยอดเฉพาะบัญชีเดียว (drill-down)
 async function summarizeAccount(accountNo) {
   const { data, error } = await supabase
     .from('transactions')
@@ -224,12 +322,15 @@ async function summarizeAccount(accountNo) {
   return `บัญชี ${accountNo} เดือนนี้\nรับ: ${income.toLocaleString()} บาท\nจ่าย: ${expense.toLocaleString()} บาท\nคงเหลือ: ${(income - expense).toLocaleString()} บาท`;
 }
 
+
+// คำนวณช่วง 7 วันล่าสุด (ตามเวลาไทย ย้อนหลังจากตอนนี้)
 function last7DaysRange() {
   const end = bangkokNow();
   const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
   return { start: start.toISOString().slice(0, 19), end: end.toISOString().slice(0, 19) };
 }
 
+// สร้างไฟล์ Excel จากรายการธุรกรรม (แต่ละแถว + ยอดรวมท้ายตาราง)
 async function buildWeeklyExcelBuffer(transactions) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('สรุปรายสัปดาห์');
@@ -270,6 +371,7 @@ async function buildWeeklyExcelBuffer(transactions) {
   const balanceRow = sheet.addRow({ type: 'คงเหลือ', amount: income - expense });
   balanceRow.font = { bold: true };
 
+  // ตารางสรุปยอดจ่ายแยกตามหมวดหมู่ (เฉพาะรายจ่าย เพราะรายรับส่วนใหญ่ไม่ได้แยกหมวด)
   sheet.addRow({});
   const catHeaderRow = sheet.addRow({ datetime: 'สรุปยอดจ่ายแยกตามหมวดหมู่' });
   catHeaderRow.font = { bold: true };
@@ -284,6 +386,7 @@ async function buildWeeklyExcelBuffer(transactions) {
     sheet.addRow({ datetime: cat, amount: amt });
   }
 
+  // ตารางสรุปยอดแยกตามธนาคาร และแยกย่อยตามเลขบัญชีภายในธนาคารนั้นด้วย
   sheet.addRow({});
   const bankHeaderRow = sheet.addRow({ datetime: 'สรุปยอดแยกตามธนาคารและบัญชี' });
   bankHeaderRow.font = { bold: true };
@@ -310,6 +413,7 @@ async function buildWeeklyExcelBuffer(transactions) {
   return { buffer: await workbook.xlsx.writeBuffer(), income, expense };
 }
 
+// สร้างไฟล์ Excel สรุป 7 วันล่าสุด อัปโหลดขึ้น Supabase Storage แล้วคืนลิงก์ดาวน์โหลด
 async function generateWeeklyExcelReport() {
   const { start, end } = last7DaysRange();
 
@@ -347,12 +451,14 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
   console.log(JSON.stringify(events, null, 2));
 
+  // ตอบ 200 กลับให้ LINE ก่อนทันที ไม่ต้องรอ logic ข้างล่างทำงานเสร็จ
   res.sendStatus(200);
 
   for (const event of events) {
     if (event.type === 'postback') {
       const params = new URLSearchParams(event.postback.data);
 
+      // กรณีกดปุ่ม "ดู X-xxxx" เพื่อ drill-down ดูแยกบัญชี
       if (params.get('action') === 'drill') {
         try {
           const text = await summarizeAccount(params.get('acc'));
@@ -370,6 +476,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
+      // กรณีกดปุ่มเลือกหมวดหมู่หลังอ่านรูป slip
       const record = {
         account_no: params.get('acc'),
         bank: params.get('bank') || null,
@@ -379,53 +486,33 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         transaction_datetime: params.get('dt'),
       };
 
-      const { data: existing, error: checkError } = await supabase
-        .from('transactions')
-        .select('id')
-        .eq('account_no', record.account_no)
-        .eq('type', record.type)
-        .eq('amount', record.amount)
-        .eq('transaction_datetime', record.transaction_datetime)
-        .limit(1);
-
-      if (checkError) {
-        console.error('เช็ครายการซ้ำไม่สำเร็จ:', checkError.message);
-      }
-
-      if (existing && existing.length > 0) {
+      // ถ้าเลือก "อื่นๆ" ให้ถามชื่อหมวดหมู่แบบพิมพ์เอง แทนที่จะบันทึกเป็นคำว่า "อื่นๆ" ตรงๆ
+      if (record.category === 'อื่นๆ') {
+        pendingCategoryInput[event.source.userId] = record;
         await client.replyMessage({
           replyToken: event.replyToken,
-          messages: [{ type: 'text', text: 'รายการนี้ถูกบันทึกไปแล้ว (ตรวจพบว่าซ้ำกับรายการเดิม จึงไม่บันทึกซ้ำ)' }],
+          messages: [{ type: 'text', text: 'พิมพ์ชื่อหมวดหมู่ที่ต้องการ:' }],
         });
         continue;
       }
 
-      const { error } = await supabase.from('transactions').insert(record);
-
-      if (error) {
-        console.error('บันทึกลง Supabase ไม่สำเร็จ:', error.message);
-        await client.replyMessage({
-          replyToken: event.replyToken,
-          messages: [{ type: 'text', text: 'บันทึกไม่สำเร็จ ลองใหม่อีกครั้งได้ไหม' }],
-        });
-      } else {
-        const typeLabel = record.type === 'income' ? 'รับ' : 'จ่าย';
-        await client.replyMessage({
-          replyToken: event.replyToken,
-          messages: [
-            {
-              type: 'text',
-              text: `บันทึกแล้ว: ${typeLabel} ${record.amount} บาท (${record.bank || 'ไม่ทราบธนาคาร'}) หมวด${record.category}`,
-            },
-          ],
-        });
-      }
+      await saveRecord(record, event.replyToken);
       continue;
     }
 
     if (event.type !== 'message') continue;
 
     if (event.message.type === 'text') {
+      // ถ้ามีรายการค้างรอให้พิมพ์ชื่อหมวดหมู่เอง (กดปุ่ม "อื่นๆ" ไว้ก่อนหน้า) ให้ใช้ข้อความนี้เป็นชื่อหมวดหมู่แล้วบันทึกเลย
+      const pending = pendingCategoryInput[event.source.userId];
+      if (pending) {
+        delete pendingCategoryInput[event.source.userId];
+        pending.category = event.message.text.trim();
+        await saveRecord(pending, event.replyToken);
+        continue;
+      }
+
+      // ปุ่ม Rich Menu ส่งข้อความนี้เข้ามาเวลากด "สรุปยอด"
       if (event.message.text === 'สรุปเดือนนี้') {
         try {
           const { text, quickReply } = await summarizeAll();
@@ -461,11 +548,13 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
         continue;
       }
 
+      // ลองเช็คว่าข้อความนี้เป็นการแจ้งเตือนธุรกรรม (เช่น แจ้งเตือนบัตรเครดิตที่ forward เข้ามา) ไหม ก่อนจะ echo กลับแบบเดิม
       let parsed = null;
       try {
         parsed = await readTextTransaction(event.message.text);
       } catch (err) {
         console.error('เช็คข้อความธุรกรรมไม่สำเร็จ:', err.message);
+        // ถ้าเช็คไม่สำเร็จ ให้ตกไป echo ข้อความแบบเดิมด้านล่างแทน ไม่ต้องหยุดทำงาน
       }
 
       if (parsed && parsed.is_transaction) {
@@ -535,10 +624,12 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
   }
 });
 
+// หน้าเช็คว่า service รันอยู่ (เปิดผ่านเบราว์เซอร์ดูได้)
 app.get('/', (req, res) => {
   res.send('CWA-ACC bot is running');
 });
 
+// จุดที่ Render Cron Job จะยิงเข้ามาทุกคืนวันอาทิตย์ เพื่อส่งสรุปรายสัปดาห์แบบ push (ไม่มี replyToken)
 app.get('/cron/weekly-summary', async (req, res) => {
   if (req.query.key !== process.env.CRON_SECRET) {
     return res.sendStatus(401);
