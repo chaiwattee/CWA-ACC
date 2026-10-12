@@ -171,11 +171,15 @@ async function readSlip(imageBuffer) {
     throw new Error(`Anthropic API error (${response.status}): ${JSON.stringify(data)}`);
   }
 
-  let text = data.content[0].text.trim();
+  const block = data && Array.isArray(data.content) ? data.content.find((b) => b && b.type === 'text' && typeof b.text === 'string') : null;
+  if (!block) throw new Error('AI ตอบว่าง (stop_reason=' + (data && data.stop_reason) + ')');
+  let text = block.text.trim();
   console.log('AI ตอบดิบ:', text);
   text = text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
 
-  return JSON.parse(text);
+  const found = text.match(/\{[\s\S]*\}/);
+  if (!found) throw new Error('AI ตอบไม่ใช่ JSON: ' + text.slice(0, 100));
+  return JSON.parse(found[0]);
 }
 
 function buildCategoryQuickReply(slip) {

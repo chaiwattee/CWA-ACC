@@ -43,7 +43,7 @@ module.exports = function mountTx(app, requireLogin) {
           .select('*')
           .gte('transaction_datetime', p.start)
           .lt('transaction_datetime', p.end)
-          .order('transaction_datetime', { ascending: false })
+          .order('transaction_datetime', { ascending: false }).order('id', { ascending: false })
           .range(from, from + 999);
         if (error) throw error;
         rows.push(...data);

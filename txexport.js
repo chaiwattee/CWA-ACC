@@ -59,7 +59,7 @@ module.exports = function mountExport(app, requireLogin) {
       for (let from = 0; from < 5000; from += 1000) {
         const { data, error } = await sb.from('transactions').select('*')
           .gte('transaction_datetime', r.start).lt('transaction_datetime', r.end)
-          .order('transaction_datetime', { ascending: true }).range(from, from + 999);
+          .order('transaction_datetime', { ascending: true }).order('id', { ascending: true }).range(from, from + 999);
         if (error) throw error;
         rows.push(...data);
         if (data.length < 1000) break;

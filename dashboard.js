@@ -58,17 +58,24 @@ module.exports = function mountDashboard(app, requireLogin) {
     const period = getPeriod(offset);
 
     try {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('account_no, bank, type, amount, category, transaction_datetime')
-        .gte('transaction_datetime', period.start)
-        .lt('transaction_datetime', period.end)
-        .order('transaction_datetime', { ascending: true })
-        .limit(5000);
+      const data = [];
+      let truncated = false;
+      for (let from = 0; from < 20000; from += 1000) {
+        const { data: page, error } = await supabase
+          .from('transactions')
+          .select('account_no, bank, type, amount, category, transaction_datetime')
+          .gte('transaction_datetime', period.start)
+          .lt('transaction_datetime', period.end)
+          .order('transaction_datetime', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, from + 999);
+        if (error) throw error;
+        data.push(...page);
+        if (page.length < 1000) break;
+        if (from === 19000) truncated = true;
+      }
 
-      if (error) throw error;
-
-      res.json({ offset, period, truncated: data.length >= 1000, ...aggregate(data) });
+      res.json({ offset, period, truncated, ...aggregate(data) });
     } catch (err) {
       console.error('summary error:', err.message);
       res.status(500).json({ error: 'server error' });
