@@ -96,6 +96,7 @@
     catsLoaded = true;
     api('GET', '/api/categories').then((d) => {
       (d.categories || []).forEach((c) => { const o = el('option'); o.value = c; catlist.appendChild(o); });
+      if (d.pinned && d.pinned.length) { CATS.length = 0; d.pinned.forEach((c) => CATS.push(c)); }
     }).catch(() => { catsLoaded = false; });
   }
 
@@ -213,6 +214,7 @@
     am.scrollTop = 0;
   }
 
+  loadCats();
   fab.addEventListener('click', () => openAdd());
   window.__openAdd = openAdd;
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && am.classList.contains('on')) finish(); });

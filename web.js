@@ -102,6 +102,7 @@ app.post('/logout', (req, res) => {
 require('./dashboard')(app, requireLogin);
 require('./txlist')(app, requireLogin);
 require('./txtrash')(app, requireLogin);
+require('./txcat')(app, requireLogin);
 require('./txedit')(app, requireLogin);
 require('./txadd')(app, requireLogin);
 require('./txrecent')(app, requireLogin);
