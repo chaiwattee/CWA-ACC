@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 const CSP =
-  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 const MANIFEST = {
   name: 'บัญชีส่วนตัว',
@@ -19,12 +19,14 @@ const MANIFEST = {
     { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
     { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
   ],
+  // รับรูปสลิปจากปุ่ม "แชร์" ของ Android (Chrome ที่ติดตั้งแอปแล้ว)
+  share_target: {
+    action: '/share',
+    method: 'POST',
+    enctype: 'multipart/form-data',
+    params: { files: [{ name: 'slip', accept: ['image/*'] }] },
+  },
 };
-
-// service worker แบบเรียบง่าย: ไม่แคชอะไรเลย (หน้ามีข้อมูลการเงิน) มีไว้ให้ติดตั้งเป็นแอปได้
-const SW = "self.addEventListener('install',()=>self.skipWaiting());\n" +
-  "self.addEventListener('activate',(e)=>e.waitUntil(self.clients.claim()));\n" +
-  "self.addEventListener('fetch',()=>{});\n";
 
 module.exports = function mountPages(app, requireLogin) {
   app.get('/', requireLogin, (req, res) => {
@@ -39,8 +41,14 @@ module.exports = function mountPages(app, requireLogin) {
   });
 
   app.get('/sw.js', (req, res) => {
-    res.type('application/javascript').set('Cache-Control', 'no-cache').send(SW);
+    res.set('Cache-Control', 'no-cache');
+    res.set('Service-Worker-Allowed', '/');
+    res.type('application/javascript');
+    res.sendFile(path.join(__dirname, 'public', 'sw.js'));
   });
+
+  // ถ้า service worker ยังไม่ทำงานตอนแชร์ จะมาตกที่นี่: พากลับหน้าหลักเฉยๆ (ไม่รับไฟล์ฝั่งเซิร์ฟเวอร์)
+  app.post('/share', (req, res) => res.redirect(303, '/?sharefail=1'));
 
   app.get('/icons/:name', (req, res) => {
     const ok = ['icon-192.png', 'icon-512.png', 'maskable-512.png'];

@@ -28,6 +28,10 @@
     '#am .btns .ok{background:var(--g);border-color:var(--g);color:#06241a;font-weight:700}' +
     '#am .err{color:var(--r);font-size:.88rem;margin-top:12px;min-height:1em}' +
     '#am button:disabled{opacity:.5}' +
+    '#am .pv{display:block;max-width:100%;max-height:150px;margin:0 auto 12px;border-radius:12px;border:1px solid var(--line)}' +
+    '#am .dup{background:#3b2a12;color:#fbbf6a;border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:.88rem}' +
+    '#am .chips2{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}' +
+    '#am .chips2 button{padding:7px 11px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--tx);font-size:.85rem;font-family:inherit}' +
     '#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;background:#1f2d27;color:var(--tx);border:1px solid var(--g);padding:10px 16px;border-radius:12px;z-index:80;display:none;font-size:.92rem}';
   document.head.appendChild(css);
 
@@ -75,8 +79,17 @@
     i.value = val || '';
     return i;
   }
+  let curOpts = null;
   function closeAm() { am.classList.remove('on'); clear(pn); document.body.style.overflow = ''; }
-
+  // ปิดฟอร์ม + คืนหน่วยความจำรูปตัวอย่าง + เรียก onDone (ใช้กับคิวสลิปที่แชร์เข้ามาหลายรูป)
+  function finish() {
+    closeAm();
+    const o = curOpts;
+    curOpts = null;
+    if (o && o.preview) { try { URL.revokeObjectURL(o.preview); } catch (e) { /* ไม่เป็นไร */ } }
+    if (o && o.onDone) o.onDone();
+  }
+  const CATS = ['อาหาร', 'เดินทาง', 'ช้อปปิ้ง', 'บิล/ประจำ', 'ชาร์จรถ', 'ค่าขนมลูก', 'ค่าเทอมลูก', 'จ่ายค่าบัตรเครดิต'];
   let catsLoaded = false;
   function loadCats() {
     if (catsLoaded) return;
@@ -86,33 +99,50 @@
     }).catch(() => { catsLoaded = false; });
   }
 
-  function openAdd() {
+  function openAdd(pre, opts) {
+    pre = pre || {};
+    curOpts = opts || null;
     loadCats();
     clear(pn);
     document.body.style.overflow = 'hidden';
-    pn.appendChild(el('h3', '', 'เพิ่มรายการ'));
+    pn.appendChild(el('h3', '', opts && opts.preview ? 'เพิ่มรายการจากสลิป' : 'เพิ่มรายการ'));
+    if (opts && opts.preview) {
+      const img = el('img', 'pv');
+      img.src = opts.preview;
+      img.alt = 'สลิป';
+      pn.appendChild(img);
+    }
+    if (opts && opts.duplicate) pn.appendChild(el('div', 'dup', 'ระบบพบรายการที่เหมือนกันนี้อยู่แล้ว (ยอด เวลา บัญชีตรงกัน) ถ้าบันทึกจะซ้ำ'));
 
-    let type = 'expense';
+    let type = pre.type === 'income' ? 'income' : 'expense';
     const seg = el('div', 'seg');
-    const be = el('button', 'e on', 'รายจ่าย');
-    const bi = el('button', 'i', 'รายรับ');
+    const be = el('button', type === 'expense' ? 'e on' : 'e', 'รายจ่าย');
+    const bi = el('button', type === 'income' ? 'i on' : 'i', 'รายรับ');
     seg.appendChild(be);
     seg.appendChild(bi);
     be.addEventListener('click', () => { type = 'expense'; be.className = 'e on'; bi.className = 'i'; });
     bi.addEventListener('click', () => { type = 'income'; bi.className = 'i on'; be.className = 'e'; });
     pn.appendChild(seg);
 
-    const amount = inp('number', '');
+    const amount = inp('number', pre.amount ? String(pre.amount) : '');
     amount.step = '0.01'; amount.min = '0.01'; amount.inputMode = 'decimal'; amount.placeholder = '0.00';
-    const cat = inp('text', '');
+    const cat = inp('text', pre.category || '');
     cat.setAttribute('list', 'catlist2'); cat.maxLength = 100; cat.placeholder = 'เช่น อาหาร, ชาร์จรถ';
-    const cp = inp('text', '');
+    const cp = inp('text', pre.counterparty || '');
     cp.maxLength = 200; cp.placeholder = 'ชื่อร้าน / ผู้โอน (ไม่ใส่ก็ได้)';
     const now = new Date(Date.now() + 7 * 3600 * 1000); // เวลาไทย
-    const date = inp('date', fmtD(now));
-    const time = inp('time', now.toISOString().slice(11, 16));
+    const date = inp('date', pre.date || fmtD(now));
+    const time = inp('time', pre.time || now.toISOString().slice(11, 16));
     pn.appendChild(field('จำนวนเงิน (บาท)', amount));
     pn.appendChild(field('หมวดหมู่', cat));
+    const chips = el('div', 'chips2');
+    CATS.forEach((c) => {
+      const b = el('button', '', c);
+      b.type = 'button';
+      b.addEventListener('click', () => { cat.value = c; });
+      chips.appendChild(b);
+    });
+    pn.appendChild(chips);
     pn.appendChild(field('ชื่อคู่โอน / รายละเอียด', cp));
     const two = el('div', 'two');
     two.appendChild(field('วันที่', date));
@@ -130,6 +160,13 @@
     own.appendChild(acc);
     own.style.display = 'none';
     let accounts = [];
+    function pick() {
+      if (!pre.account_no && !pre.bank) return;
+      const i = accounts.findIndex((a) => a.account === pre.account_no);
+      if (i >= 0) { sel.value = String(i); }
+      else { sel.value = 'own'; bank.value = pre.bank || ''; acc.value = pre.account_no || ''; }
+      own.style.display = sel.value === 'own' ? 'flex' : 'none';
+    }
     function fillSel() {
       clear(sel);
       accounts.forEach((a, i) => { const o = el('option', '', a.bank + ' · ' + a.account); o.value = String(i); sel.appendChild(o); });
@@ -137,6 +174,7 @@
       o.value = 'own';
       sel.appendChild(o);
       own.style.display = sel.value === 'own' ? 'flex' : 'none';
+      pick();
     }
     fillSel();
     sel.addEventListener('change', () => { own.style.display = sel.value === 'own' ? 'flex' : 'none'; });
@@ -153,7 +191,7 @@
     btns.appendChild(bs);
     pn.appendChild(btns);
 
-    bc.addEventListener('click', closeAm);
+    bc.addEventListener('click', finish);
     bs.addEventListener('click', () => {
       const a = Number(amount.value);
       if (!(a > 0)) { err.textContent = 'กรุณาใส่จำนวนเงินที่มากกว่า 0'; return; }
@@ -166,15 +204,16 @@
         type: type, amount: a, category: cat.value.trim(), counterparty: cp.value.trim(),
         bank: b, account_no: n, transaction_datetime: date.value + 'T' + (time.value || '00:00'),
       }).then(() => {
-        closeAm();
         say('บันทึกแล้ว');
         document.dispatchEvent(new Event('visibilitychange')); // ให้ Dashboard โหลดตัวเลขใหม่
+        finish();
       }).catch((e) => { if (e.message === 'unauth') return; bs.disabled = false; bc.disabled = false; err.textContent = 'บันทึกไม่สำเร็จ (' + e.message + ')'; });
     });
     am.classList.add('on');
     am.scrollTop = 0;
   }
 
-  fab.addEventListener('click', openAdd);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && am.classList.contains('on')) closeAm(); });
+  fab.addEventListener('click', () => openAdd());
+  window.__openAdd = openAdd;
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && am.classList.contains('on')) finish(); });
 })();
