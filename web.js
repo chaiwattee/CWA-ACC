@@ -105,6 +105,7 @@ require('./txedit')(app, requireLogin);
 require('./txadd')(app, requireLogin);
 require('./txrecent')(app, requireLogin);
 require('./txslip')(app, requireLogin);
+require('./txexport')(app, requireLogin);
 app.get('/share.js', requireLogin, (req, res) => { res.set('Cache-Control', 'no-store'); res.set('X-Content-Type-Options', 'nosniff'); res.type('application/javascript'); res.sendFile(require('path').join(__dirname, 'public', 'share.js')); });
 require('./pages')(app, requireLogin);
 app.get('/', requireLogin, (req, res) => {
