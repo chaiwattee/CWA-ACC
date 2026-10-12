@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1210">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<title>บัญชีส่วนตัว</title>
+<style>
+:root{--bg:#0b1210;--card:#131d19;--line:#1f2d27;--tx:#e8f1ed;--mut:#8aa097;--g:#34d399;--r:#fb7185}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif;background:var(--bg);color:var(--tx);padding-bottom:env(safe-area-inset-bottom)}
+header{display:flex;align-items:center;justify-content:space-between;padding:16px 16px 4px}
+header h1{font-size:1.1rem;margin:0;font-weight:600;letter-spacing:.2px}
+header h1 span{color:var(--g)}
+header form{margin:0}
+header button{background:var(--card);color:var(--mut);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:.85rem}
+main{max-width:640px;margin:0 auto;padding:8px 14px 28px}
+.nav{display:flex;align-items:center;gap:10px;margin:10px 0 14px}
+.nav button{width:42px;height:42px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--tx);font-size:1.3rem}
+.nav button:disabled{opacity:.3}
+.period{flex:1;text-align:center}
+.period b{display:block;font-weight:600}
+.period small{color:var(--g);font-size:.8rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:12px}
+.hero{background:linear-gradient(145deg,#16342a,#101a16 70%);padding:20px 18px}
+.label{color:var(--mut);font-size:.82rem}
+.big{font-size:2.3rem;font-weight:700;letter-spacing:-.5px;margin:4px 0 12px;font-variant-numeric:tabular-nums}
+.pos{color:var(--g)}
+.neg{color:var(--r)}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{flex:1;min-width:130px;background:#ffffff0d;border-radius:12px;padding:10px 12px}
+.chip b{display:block;font-size:1.05rem;margin-top:2px;font-variant-numeric:tabular-nums}
+.count{margin-top:12px;color:var(--mut);font-size:.8rem}
+h2{font-size:.95rem;margin:20px 4px 10px;font-weight:600;color:var(--mut)}
+.donutwrap{display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center}
+.donut{width:150px;height:150px;flex:none}
+.donut text{fill:var(--tx);text-anchor:middle}
+.legend{flex:1;min-width:190px}
+.lg{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:.9rem}
+.lg i{width:10px;height:10px;border-radius:3px;flex:none}
+.lg .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg .p{color:var(--mut);font-size:.8rem;margin-left:4px}
+.lg .v{font-variant-numeric:tabular-nums}
+.acc{display:flex;justify-content:space-between;gap:8px;padding:12px 0;border-top:1px solid var(--line)}
+.acc:first-child{border-top:0;padding-top:0}
+.acc:last-child{padding-bottom:0}
+.acc .name{font-weight:600}
+.acc .sub{color:var(--mut);font-size:.8rem}
+.acc .nums{text-align:right;font-size:.9rem;font-variant-numeric:tabular-nums}
+.msg{padding:14px;text-align:center;color:var(--mut)}
+.warn{background:#3b2a12;color:#fbbf6a;border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:.85rem}
+</style>
+</head>
+<body>
+<header>
+  <h1>บัญชี<span>ส่วนตัว</span></h1>
+  <form method="post" action="/logout"><button type="submit">ออกจากระบบ</button></form>
+</header>
+<main>
+  <div class="nav">
+    <button id="prev" aria-label="รอบก่อนหน้า">‹</button>
+    <div class="period"><b id="range">…</b><small id="badge"></small></div>
+    <button id="next" aria-label="รอบถัดไป">›</button>
+  </div>
+  <div id="warn"></div>
+  <div class="card hero">
+    <div class="label">คงเหลือ (รับ − จ่าย)</div>
+    <div class="big" id="bal">–</div>
+    <div class="chips">
+      <div class="chip"><span class="label">รับ</span><b class="pos" id="inc">–</b></div>
+      <div class="chip"><span class="label">จ่าย</span><b class="neg" id="exp">–</b></div>
+    </div>
+    <div class="count" id="cnt"></div>
+  </div>
+  <h2>รายจ่ายแยกตามหมวดหมู่</h2>
+  <div class="card" id="cats"><div class="msg">กำลังโหลด…</div></div>
+  <h2>แยกตามธนาคารและบัญชี</h2>
+  <div class="card" id="accs"><div class="msg">กำลังโหลด…</div></div>
+</main>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt0 = (n) => Number(n).toLocaleString('th-TH', { maximumFractionDigits: 0 });
+  const fmtDate = (iso) => new Date(iso + 'T00:00:00Z').toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit', timeZone: 'UTC' });
+  const dayBefore = (iso) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); };
+  const COLORS = ['#34d399', '#60a5fa', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c', '#94a3b8'];
+  const SVGNS = 'http://www.w3.org/2000/svg';
+
+  // ใช้ textContent เสมอ ไม่ใช้ innerHTML เพื่อกัน XSS จากชื่อหมวดที่พิมพ์เอง
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function svg(tag, attrs) {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+
+  let offset = 0; window.__off = () => offset;
+
+  function groupCats(list) {
+    if (list.length <= 7) return list;
+    const top = list.slice(0, 6);
+    const rest = list.slice(6).reduce((s, c) => s + c.total, 0);
+    top.push({ name: 'อื่นๆ (รวม)', total: rest });
+    return top;
+  }
+
+  function donut(items, total) {
+    const s = svg('svg', { viewBox: '0 0 42 42', class: 'donut', role: 'img', 'aria-label': 'สัดส่วนรายจ่าย' });
+    s.appendChild(svg('circle', { cx: 21, cy: 21, r: 15.915, fill: 'none', stroke: '#1f2d27', 'stroke-width': 5 }));
+    let acc = 0;
+    items.forEach((c, i) => {
+      const p = total > 0 ? (c.total / total) * 100 : 0;
+      s.appendChild(svg('circle', {
+        cx: 21, cy: 21, r: 15.915, fill: 'none', stroke: COLORS[i % COLORS.length], 'stroke-width': 5,
+        'stroke-dasharray': p + ' ' + (100 - p), 'stroke-dashoffset': 25 - acc,
+      }));
+      acc += p;
+    });
+    const t1 = svg('text', { x: 21, y: 20, 'font-size': 3.2, 'font-weight': 700 });
+    t1.textContent = fmt0(total);
+    const t2 = svg('text', { x: 21, y: 25, 'font-size': 2.4 });
+    t2.style.fill = '#8aa097';
+    t2.textContent = 'รายจ่าย';
+    s.appendChild(t1);
+    s.appendChild(t2);
+    return s;
+  }
+
+  function render(d) {
+    $('range').textContent = fmtDate(d.period.startDate) + ' – ' + fmtDate(dayBefore(d.period.endDate));
+    $('badge').textContent = d.offset === 0 ? 'รอบปัจจุบัน' : d.offset === -1 ? 'รอบที่แล้ว' : 'ย้อนหลัง ' + (-d.offset) + ' รอบ';
+    $('inc').textContent = fmt(d.income);
+    $('exp').textContent = fmt(d.expense);
+    $('bal').textContent = fmt(d.balance);
+    $('bal').className = 'big ' + (d.balance >= 0 ? 'pos' : 'neg');
+    $('cnt').textContent = d.count + ' รายการในรอบนี้';
+
+    const warn = $('warn');
+    clear(warn);
+    if (d.truncated) warn.appendChild(el('div', 'warn', 'รอบนี้มีรายการมากกว่า 1,000 รายการ ตัวเลขอาจไม่ครบ'));
+
+    const cats = $('cats');
+    clear(cats);
+    if (!d.byCategory.length) {
+      cats.appendChild(el('div', 'msg', 'ไม่มีรายจ่ายในรอบนี้'));
+    } else {
+      const items = groupCats(d.byCategory);
+      const wrap = el('div', 'donutwrap');
+      wrap.appendChild(donut(items, d.expense));
+      const lg = el('div', 'legend');
+      items.forEach((c, i) => {
+        const pct = d.expense > 0 ? (c.total / d.expense * 100).toFixed(1) : '0.0';
+        const row = el('div', 'lg');
+        const dot = el('i');
+        dot.style.background = COLORS[i % COLORS.length];
+        row.appendChild(dot);
+        const n = el('span', 'n', c.name);
+        n.appendChild(el('span', 'p', pct + '%'));
+        row.appendChild(n);
+        row.appendChild(el('span', 'v', fmt(c.total)));
+        lg.appendChild(row);
+      });
+      wrap.appendChild(lg);
+      cats.appendChild(wrap);
+    }
+
+    const accs = $('accs');
+    clear(accs);
+    if (!d.byAccount.length) {
+      accs.appendChild(el('div', 'msg', 'ไม่มีรายการในรอบนี้'));
+    } else {
+      d.byAccount.forEach((a) => {
+        const row = el('div', 'acc');
+        const left = el('div');
+        left.appendChild(el('div', 'name', a.bank));
+        left.appendChild(el('div', 'sub', 'บัญชี ' + a.account));
+        const right = el('div', 'nums');
+        right.appendChild(el('div', 'pos', 'รับ ' + fmt(a.income)));
+        right.appendChild(el('div', 'neg', 'จ่าย ' + fmt(a.expense)));
+        row.appendChild(left);
+        row.appendChild(right);
+        accs.appendChild(row);
+      });
+    }
+  }
+
+  function showError() {
+    const cats = $('cats');
+    clear(cats);
+    cats.appendChild(el('div', 'msg', 'โหลดข้อมูลไม่สำเร็จ ลองใหม่อีกครั้ง'));
+  }
+
+  function load() {
+    $('prev').disabled = true;
+    $('next').disabled = true;
+    fetch('/api/summary?offset=' + offset, { credentials: 'same-origin', cache: 'no-store' })
+      .then((r) => {
+        if (r.status === 401) { location.href = '/login'; throw new Error('unauth'); }
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+      })
+      .then(render)
+      .catch((e) => { if (e.message !== 'unauth') showError(); })
+      .then(() => { $('prev').disabled = offset <= -24; $('next').disabled = offset >= 0; });
+  }
+
+  $('prev').addEventListener('click', () => { offset -= 1; load(); });
+  $('next').addEventListener('click', () => { offset += 1; load(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  load();
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+})();
+</script>
+<script src="/detail.js"></script>
+<script src="/add.js"></script>
+<script src="/recent.js"></script>
+</body>
+</html>

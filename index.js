@@ -3,6 +3,7 @@ const line = require('@line/bot-sdk');
 const { createClient } = require('@supabase/supabase-js');
 const ExcelJS = require('exceljs');
 const nodemailer = require('nodemailer');
+const { bangkokNow, toDateStr, lastBusinessDayOfMonth, startOfThisMonth } = require('./shared');
 
 const config = {
   channelSecret: process.env.CHANNEL_SECRET,
@@ -192,55 +193,20 @@ function buildCategoryQuickReply(slip) {
   };
 }
 
-function bangkokNow() {
-  return new Date(Date.now() + 7 * 60 * 60 * 1000);
-}
+
 
 function normalizeAccountNo(raw) {
   const digits = (raw || '').replace(/\D/g, '');
   return digits.slice(-4) || raw;
 }
 
-const THAI_BANK_HOLIDAYS = [
-  '2026-01-01', '2026-01-02',
-  '2026-03-03',
-  '2026-04-06', '2026-04-13', '2026-04-14', '2026-04-15',
-  '2026-05-01', '2026-05-04',
-  '2026-06-01', '2026-06-03',
-  '2026-07-28', '2026-07-29',
-  '2026-08-12',
-  '2026-10-13', '2026-10-16', '2026-10-23',
-  '2026-12-05', '2026-12-07', '2026-12-10', '2026-12-31',
-];
 
-function toDateStr(d) {
-  return d.toISOString().slice(0, 10);
-}
 
-function lastBusinessDayOfMonth(year, monthIndex) {
-  let d = new Date(Date.UTC(year, monthIndex + 1, 0));
-  while (true) {
-    const day = d.getUTCDay();
-    if (day !== 0 && day !== 6 && !THAI_BANK_HOLIDAYS.includes(toDateStr(d))) break;
-    d.setUTCDate(d.getUTCDate() - 1);
-  }
-  return d;
-}
 
-function startOfThisMonth() {
-  const now = bangkokNow();
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
 
-  const currentPayDay = lastBusinessDayOfMonth(y, m);
-  const todayDateOnly = new Date(Date.UTC(y, m, now.getUTCDate()));
 
-  const payDay = todayDateOnly.getTime() >= currentPayDay.getTime()
-    ? currentPayDay
-    : lastBusinessDayOfMonth(m === 0 ? y - 1 : y, (m + 11) % 12);
 
-  return payDay.toISOString().slice(0, 19);
-}
+
 
 async function summarizeAll() {
   const { data, error } = await supabase
